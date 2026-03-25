@@ -1,164 +1,117 @@
 import streamlit as st
+import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 from streamlit_google_auth import Authenticate
-import datetime
-import re
 
-# --- 1. PAGE CONFIGURATION ---
-st.set_page_config(page_title="Satlex Feynman AI", page_icon="🧠", layout="wide")
+# 1. PAGE SETUP
+st.set_page_config(page_title="Satlex Feynman AI", layout="wide")
 
-# --- 2. SECRETS & ADMIN SETUP ---
-ADMIN_EMAIL = "satviksinghalyt@gmail.com" # Your Master Key
+# 2. GOOGLE AUTHENTICATION SETUP
+google_creds = {
+    "web": {
+        "client_id": st.secrets["GOOGLE_CLIENT_ID"],
+        "project_id": st.secrets["firebase"]["project_id"],
+        "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+        "token_uri": "https://oauth2.googleapis.com/token",
+        "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        "client_secret": st.secrets["GOOGLE_CLIENT_SECRET"]
+    }
+}
 
-# Initialize Firebase Admin (Database)
+with open("google_credentials.json", "w") as f:
+    json.dump(google_creds, f)
+
+authenticator = Authenticate(
+    secret_credentials_path="google_credentials.json",
+    cookie_name="satlex_auth",
+    cookie_key="random_secret_key_123",
+    redirect_uri="https://faynman.streamlit.app",
+)
+
+# 3. FIREBASE DATABASE SETUP
+# This if-statement prevents Streamlit from crashing by trying to initialize Firebase twice
 if not firebase_admin._apps:
-    cred_dict = dict(st.secrets["firebase"])
-    cred = credentials.Certificate(cred_dict)
+    cert = dict(st.secrets["firebase"])
+    cred = credentials.Certificate(cert)
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
 
-# --- 3. GOOGLE AUTHENTICATION ---
-# This uses the Client ID and Secret you saved in Streamlit
-authenticator = Authenticate(
-    secret_credentials_path=None, # We use secrets directly below
-    cookie_name='satlex_cookie',
-    cookie_key='satlex_secure_key',
-    redirect_uri='https://faynman.streamlit.app/',
-)
-
-# Manually inject the secrets for the authenticator
-authenticator.client_id = st.secrets["GOOGLE_CLIENT_ID"]
-authenticator.client_secret = st.secrets["GOOGLE_CLIENT_SECRET"]
-
+# 4. TRIGGER THE LOGIN UI
 authenticator.check_authentification()
+authenticator.login()
 
-# --- 4. THE LOGIN GATE ---
-if not st.session_state.get('connected'):
-    st.title("Welcome to Satlex Feynman AI 🧠")
-    st.markdown("### Master your JEE concepts. Earn Satlex Coins. Unlock premium notes.")
-    st.write("To keep your wallet secure, please log in with your official Google account.")
+# ==========================================
+# 5. THE MAIN APPLICATION (SECURE ZONE)
+# ==========================================
+if st.session_state.get('connected'):
     
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        # This creates the "Sign in with Google" button
-        authenticator.login()
-        
-    st.stop() # Stops the rest of the app from loading until logged in
+    # Get user details from Google
+    user_info = st.session_state['user_info']
+    user_email = user_info.get('email')
+    user_name = user_info.get('name', 'Student')
 
-# =====================================================================
-# --- LOGGED IN AREA (Secure) ---
-# =====================================================================
+    # Fetch or Create User Wallet in Firestore
+    user_ref = db.collection('students').document(user_email)
+    user_doc = user_ref.get()
 
-# Get the verified Google email
-user_email = st.session_state['user_info'].get('email')
-user_name = st.session_state['user_info'].get('name', 'Student')
+    if not user_doc.exists:
+        # First time login! Give them 0 coins to start.
+        user_ref.set({'name': user_name, 'coins': 0})
+        coins = 0
+    else:
+        # Returning user. Fetch their balance.
+        coins = user_doc.to_dict().get('coins', 0)
 
-# --- 5. USER WALLET SETUP ---
-user_ref = db.collection("students").document(user_email)
-user_doc = user_ref.get()
-
-if not user_doc.exists:
-    user_ref.set({"coins": 0, "name": user_name, "joined": str(datetime.date.today())})
-    user_coins = 0
-else:
-    user_coins = user_doc.to_dict().get("coins", 0)
-
-# --- 6. SIDEBAR NAVIGATION ---
-with st.sidebar:
-    st.title("Satlex Identity")
-    st.write(f"👤 **{user_name}**")
-    st.metric(label="Satlex Wallet", value=f"{user_coins} SC")
-    st.divider()
+    # --- SIDEBAR UI ---
+    st.sidebar.title("🧠 Satlex Identity")
+    st.sidebar.write(f"Welcome, **{user_name}**")
+    st.sidebar.metric("Satlex Wallet", f"{coins} SC")
     
-    app_mode = st.radio("Navigation", ["Feynman Studio", "Marketplace"])
+    if st.sidebar.button('Log out'):
+        authenticator.logout()
+
+    # --- ADMIN MARKETPLACE DASHBOARD ---
+    # Put your exact Gmail address here to unlock God Mode
+    ADMIN_EMAIL = "satviksinghalyt@gmail.com" 
     
-    # 👑 ADMIN UNLOCK (Only visible to satviksinghalyt@gmail.com)
     if user_email == ADMIN_EMAIL:
-        st.divider()
-        st.warning("👑 Admin Panel")
-        if st.checkbox("Open Creator Dashboard"):
-            app_mode = "Admin"
+        st.sidebar.divider()
+        st.sidebar.subheader("👑 Admin Panel")
+        with st.sidebar.expander("Upload to Marketplace"):
+            new_note_title = st.text_input("Note Title (e.g., Thermodynamics)")
+            note_price = st.number_input("Price (SC)", min_value=0, step=10)
+            note_link = st.text_input("Google Drive Link to PDF")
             
-    st.divider()
-    authenticator.logout()
+            if st.button("Publish Notes"):
+                db.collection('marketplace').add({
+                    'title': new_note_title,
+                    'price': note_price,
+                    'link': note_link,
+                    'author': 'Satvik (Admin)'
+                })
+                st.sidebar.success("Published to Marketplace!")
 
-# --- 7. APP SCREENS ---
+    # --- MAIN AI STUDIO UI ---
+    st.title("Feynman AI Studio")
+    st.write("Explain a JEE concept to the AI. Score an 8/10 or higher to earn Satlex Coins!")
 
-if app_mode == "Feynman Studio":
-    st.header("The Feynman AI Studio 🎙️")
-    st.info("Explain a concept clearly. The AI will grade you, and scores of 8+ earn 10 Satlex Coins!")
+    # Place your Groq AI text area or audio uploader here
+    concept_explanation = st.text_area("Explain your concept:")
     
-    # ==========================================
-    # ⬇️ PASTE YOUR GROQ AI CODE BELOW HERE ⬇️
-    # ==========================================
-    
-    st.write("*(AI audio recorder and Groq logic goes here)*")
-    
-    # Example of how you add coins once your AI gives a score:
-    # if ai_score >= 8:
-    #     user_ref.update({"coins": user_coins + 10})
-    #     st.balloons()
-    #     st.success("10 Coins Added!")
-
-    # ==========================================
-    # ⬆️ PASTE YOUR GROQ AI CODE ABOVE HERE ⬆️
-    # ==========================================
-
-
-elif app_mode == "Marketplace":
-    st.header("Satlex Marketplace 🛒")
-    st.write("Spend your hard-earned coins on premium resources.")
-    
-    notes = db.collection("marketplace").stream()
-    for note in notes:
-        data = note.to_dict()
-        with st.container(border=True):
-            st.subheader(data.get("title", "Untitled Resource"))
-            st.write(f"💰 Price: **{data.get('price', 0)} SC**")
-            
-            # Check if user already bought it
-            purchase_id = f"{user_email}_{note.id}"
-            purchase_ref = db.collection("purchases").document(purchase_id)
-            
-            if purchase_ref.get().exists:
-                st.success("✅ Purchased - Secure Viewer Unlocked")
-                # Secure iframe viewer (Hides download button)
-                embed_url = f"https://drive.google.com/file/d/{data['drive_id']}/preview?rm=minimal"
-                st.components.v1.iframe(embed_url, height=600, scrolling=True)
-            else:
-                if st.button(f"Buy Resource", key=f"buy_{note.id}"):
-                    if user_coins >= data.get('price', 0):
-                        # Deduct coins and grant access
-                        user_ref.update({"coins": user_coins - data.get('price', 0)})
-                        purchase_ref.set({"unlocked_on": str(datetime.datetime.now())})
-                        st.rerun()
-                    else:
-                        st.error("Not enough Satlex Coins. Go practice in the Feynman Studio!")
-
-elif app_mode == "Admin":
-    st.header("Creator Dashboard 👑")
-    st.write("Upload your JEE videos or PDFs to Google Drive, set sharing to 'Anyone with link', and paste the link below.")
-    
-    with st.form("admin_upload", clear_on_submit=True):
-        note_title = st.text_input("Resource Title (e.g., Kinematics One-Shot)")
-        note_price = st.number_input("Price (Satlex Coins)", min_value=1, value=50)
-        raw_drive_link = st.text_input("Google Drive 'Share' Link")
+    if st.button("Submit to AI"):
+        # Placeholder for your Groq AI evaluation logic
+        st.info("Sending to Groq AI for evaluation...")
         
-        if st.form_submit_button("🚀 Publish to Marketplace"):
-            if "drive.google.com" in raw_drive_link:
-                try:
-                    # Automatically extract the secret file ID from the messy Drive link
-                    file_id = re.search(r'/d/([a-zA-Z0-9_-]+)', raw_drive_link).group(1)
-                    db.collection("marketplace").add({
-                        "title": note_title,
-                        "price": note_price,
-                        "drive_id": file_id,
-                        "date_added": str(datetime.date.today())
-                    })
-                    st.success(f"'{note_title}' is now live!")
-                except Exception as e:
-                    st.error("Could not read the link. Make sure it's a standard Drive share link.")
-            else:
-                st.error("Please paste a valid Google Drive link.")
+        # Example of how you will add coins once Groq gives a good score:
+        # user_ref.update({'coins': firestore.Increment(10)})
+        # st.success("You earned 10 SC!")
+        # st.rerun()
+
+# ==========================================
+# 6. THE LOGGED-OUT STATE
+# ==========================================
+else:
+    st.info("Please log in securely with your Google account to access your JEE workspace.")
+                
