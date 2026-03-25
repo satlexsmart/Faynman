@@ -1,5 +1,6 @@
 streamlit
-groq
 firebase-admin
-Pillow
-pandas
+streamlit-google-auth
+requests
+groq
+streamlit-mic-recorder
