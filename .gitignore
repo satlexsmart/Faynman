@@ -1,0 +1,10 @@
+# Secrets
+.env
+.streamlit/secrets.toml
+
+# Python junk
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
