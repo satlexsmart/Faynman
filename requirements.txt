@@ -1,6 +1,8 @@
 streamlit
 firebase-admin
-streamlit-google-auth
-requests
 groq
-streamlit-mic-recorder
+streamlit-webrtc
+aiortc
+av
+mnemonic
+pandas
